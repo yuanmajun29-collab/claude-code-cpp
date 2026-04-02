@@ -242,6 +242,12 @@ list(APPEND SOURCES
 # P7 Plugins
 list(APPEND SOURCES
     src/plugins/plugin_api.cpp
+    src/plugins/plugin_loader.cpp
+)
+
+# Memory
+list(APPEND SOURCES
+    src/memory/memory_store.cpp
 )
 
 # P8 Bridge

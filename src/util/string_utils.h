@@ -171,6 +171,17 @@ inline std::string get_iso_date() {
     return buf;
 }
 
+// Get current ISO 8601 datetime (YYYY-MM-DD HH:MM:SS)
+inline std::string get_iso_datetime() {
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_buf;
+    localtime_r(&time_t_now, &tm_buf);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+    return buf;
+}
+
 // Escape JSON string
 inline std::string json_escape(const std::string& s) {
     std::string result;
