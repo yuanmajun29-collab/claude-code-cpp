@@ -1,0 +1,105 @@
+# ============================================================
+# Claude Code C++ — Docker Compose
+# ============================================================
+# Usage:
+#   docker compose up claude        # Interactive REPL
+#   docker compose up --build       # Rebuild and start
+#   docker compose run --rm claude "fix this bug"  # One-shot prompt
+#   docker compose down -v          # Stop and remove volumes
+# ============================================================
+
+services:
+  # ----------------------------------------------------------
+  # Claude Code C++ — Main interactive service
+  # ----------------------------------------------------------
+  claude:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claude-code-cpp
+    restart: unless-stopped
+    stdin_open: true      # Keep stdin open for REPL
+    tty: true             # Allocate pseudo-TTY
+    ports:
+      - "${BRIDGE_PORT:-9876}:9876"   # IDE Bridge
+    environment:
+      # ---- Required ----
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?Error: ANTHROPIC_API_KEY is required}
+      # ---- Model ----
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-20250514}
+      # ---- Permission ----
+      - CLAUDE_PERMISSION_MODE=${CLAUDE_PERMISSION_MODE:-default}
+      # ---- Behavior ----
+      - MAX_TOKENS=${MAX_TOKENS:-8192}
+      - MAX_ITERATIONS=${MAX_ITERATIONS:-100}
+      - CLAUDE_THINKING=${CLAUDE_THINKING:-}
+      - THINKING_BUDGET=${THINKING_BUDGET:-}
+      - CLAUDE_VERBOSE=${CLAUDE_VERBOSE:-}
+      - NO_COLOR=${NO_COLOR:-}
+      - BRIDGE_PORT=${BRIDGE_PORT:-0}
+      # ---- MCP ----
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
+    volumes:
+      # Workspace (code to work on)
+      - ${WORKSPACE_DIR:-./workspace}:/home/claude/workspace
+      # Configuration (API key, preferences)
+      - claude-config:/home/claude/.claude
+      # Plugin directory
+      - claude-plugins:/home/claude/.claude/plugins
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 512M
+    # Logging
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    # Health check (ensure binary is intact)
+    healthcheck:
+      test: ["/opt/claude-code/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ----------------------------------------------------------
+  # One-shot mode — runs a single prompt and exits
+  # ----------------------------------------------------------
+  # Usage: docker compose run --rm prompt "explain this code"
+  prompt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claude-code-prompt
+    stdin_open: false
+    tty: false
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?Error: ANTHROPIC_API_KEY is required}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-20250514}
+      - CLAUDE_PERMISSION_MODE=${CLAUDE_PERMISSION_MODE:-bypass}
+      - NO_COLOR=true
+    volumes:
+      - ${WORKSPACE_DIR:-./workspace}:/home/claude/workspace
+      - claude-config:/home/claude/.claude
+      - claude-plugins:/home/claude/.claude/plugins
+    entrypoint: ["/opt/claude-code/claude-code"]
+    # Arguments are passed via `docker compose run prompt "your prompt"`
+    command: []
+
+# ============================================================
+# Volumes
+# ============================================================
+volumes:
+  claude-config:
+    driver: local
+  claude-plugins:
+    driver: local

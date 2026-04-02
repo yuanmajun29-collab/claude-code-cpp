@@ -1,0 +1,37 @@
+# ============================================================
+# Claude Code C++ — Development Dockerfile
+# ============================================================
+# Usage:
+#   docker build -f Dockerfile.dev -t claude-code-dev .
+#   docker run -it -v $(pwd):/src claude-code-dev bash
+#
+# This image includes all build tools + test dependencies.
+# Mount source code as volume for iterative development.
+# ============================================================
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+
+# Full build toolchain + debug tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    g++-12 \
+    gdb \
+    valgrind \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    git \
+    ca-certificates \
+    curl \
+    vim \
+    less \
+    jq \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Default: configure and build
+CMD ["bash", "-c", "cmake -B build -DBUILD_TESTS=ON && cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure"]

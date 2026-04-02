@@ -1,0 +1,16 @@
+# Build stages
+_deps/
+build/
+.cmake/
+.git/
+.gitignore
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+docs/
+*.docx
+*.md
+# Test files (not needed in production image)
+tests/
