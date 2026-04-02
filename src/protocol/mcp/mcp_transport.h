@@ -1,6 +1,5 @@
 #pragma once
 
-#include "protocol/mcp/mcp_client.h"
 #include <string>
 #include <functional>
 #include <memory>
@@ -12,6 +11,9 @@
 
 namespace claude {
 namespace mcp {
+
+// Forward declaration
+struct McpServerConfig;
 
 // HTTP-based MCP transport (SSE + HTTP POST)
 class McpSseTransport {

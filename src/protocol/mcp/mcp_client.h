@@ -8,6 +8,7 @@
 #include <optional>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <curl/curl.h>
 
 namespace claude {
 namespace mcp {
@@ -101,9 +102,25 @@ private:
     bool connect_stdio();
     bool connect_sse();
 
+    // SSE helpers
+    std::string send_sse_request(const std::string& message);
+    bool send_sse_notification(const std::string& message);
+
     // Read from transport
     std::string read_response(int timeout_ms = 30000);
     void write_message(const std::string& message);
+
+    // curl write callback
+    static size_t curl_write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
+        auto* response = static_cast<std::string*>(userdata);
+        size_t total = size * nmemb;
+        response->append(ptr, total);
+        return total;
+    }
+
+    // Transport type
+    enum class TransportType { Stdio, SSE };
+    TransportType transport_type_ = TransportType::Stdio;
 
     // Process incoming messages
     void process_message(const JsonRpcMessage& msg);
@@ -127,6 +144,8 @@ private:
     // SSE state
     int curl_handle_ = 0;  // opaque handle indicator
     std::string sse_session_id_;
+    std::string post_endpoint_;
+    std::unique_ptr<class McpSseTransport> sse_transport_;  // Forward: defined in mcp_transport.h
 };
 
 // MCP Manager - manages all MCP server connections

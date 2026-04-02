@@ -1,4 +1,5 @@
 #include "protocol/mcp/mcp_transport.h"
+#include "protocol/mcp/mcp_client.h"
 #include "util/string_utils.h"
 #include <nlohmann/json.hpp>
 #include <curl/curl.h>

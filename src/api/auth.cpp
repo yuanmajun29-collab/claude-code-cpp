@@ -53,10 +53,13 @@ AuthResult AuthManager::authenticate(AuthType type) {
         current_token_ = key;
         result.success = true;
         result.token = key;
-    } else {
-        // OAuth flow - not fully implemented in P0
+    } else if (type == AuthType::OAuth) {
+        // OAuth 2.0 flow requires browser-based authorization
+        // Placeholder for future implementation (requires OAuth provider setup)
         result.success = false;
-        result.error = "OAuth authentication not yet implemented. Use API key instead.";
+        result.error = "OAuth 2.0 is not yet supported. "
+                       "Please use API key authentication by setting ANTHROPIC_API_KEY.";
+        spdlog::info("OAuth authentication requested but not implemented in v0.1");
     }
 
     return result;

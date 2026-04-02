@@ -1,4 +1,5 @@
 #include "protocol/mcp/mcp_client.h"
+#include "protocol/mcp/mcp_transport.h"
 #include "util/process_utils.h"
 #include "util/string_utils.h"
 #include <spdlog/spdlog.h>
@@ -81,6 +82,13 @@ void McpClient::disconnect() {
     if (write_fd_ >= 0) { close(write_fd_); write_fd_ = -1; }
     if (read_fd_ >= 0) { close(read_fd_); read_fd_ = -1; }
 
+    // Disconnect SSE if active
+    if (sse_transport_) {
+        sse_transport_->disconnect();
+        sse_transport_.reset();
+    }
+    post_endpoint_.clear();
+
     connected_ = false;
     spdlog::info("MCP server '{}' disconnected", config_.name);
 }
@@ -161,9 +169,141 @@ bool McpClient::connect_stdio() {
 }
 
 bool McpClient::connect_sse() {
-    // SSE transport stub - will use libcurl in full implementation
-    spdlog::warn("MCP SSE transport not fully implemented for {}", config_.name);
-    return false;
+    if (!sse_transport_) {
+        sse_transport_ = std::make_unique<McpSseTransport>();
+    }
+
+    // Build headers (auth if configured)
+    std::map<std::string, std::string> headers;
+    auto auth_it = config_.env.find("MCP_AUTH_TOKEN");
+    if (auth_it != config_.env.end() && !auth_it->second.empty()) {
+        headers["Authorization"] = "Bearer " + auth_it->second;
+    }
+    headers["Accept"] = "text/event-stream";
+
+    if (!sse_transport_->connect(config_.url, headers)) {
+        spdlog::error("MCP SSE connect failed for {}", config_.name);
+        return false;
+    }
+
+    // Extract POST endpoint from SSE response
+    std::string post_url = sse_transport_->post_endpoint();
+    if (post_url.empty()) {
+        // Derive POST URL from GET URL (replace /sse with /message)
+        post_url = config_.url;
+        if (post_url.find("/sse") != std::string::npos) {
+            post_url = post_url.substr(0, post_url.find("/sse")) + "/message";
+        } else {
+            post_url = config_.url;
+        }
+    }
+
+    post_endpoint_ = post_url;
+    transport_type_ = TransportType::SSE;
+    connected_ = true;
+
+    // Send initialize request via POST
+    json init_params = {
+        {"protocolVersion", "2024-11-05"},
+        {"capabilities", json::object()},
+        {"clientInfo", {{"name", "claude-code-cpp"}, {"version", "0.1.0"}}}
+    };
+
+    json init_request = {
+        {"jsonrpc", "2.0"},
+        {"id", 1},
+        {"method", "initialize"},
+        {"params", init_params}
+    };
+
+    std::string response = send_sse_request(init_request.dump());
+    if (response.empty()) {
+        spdlog::error("MCP SSE initialize failed for {}", config_.name);
+        sse_transport_->disconnect();
+        connected_ = false;
+        return false;
+    }
+
+    // Parse server info
+    try {
+        auto result = json::parse(response);
+        if (result.contains("serverInfo")) {
+            server_name_ = result["serverInfo"].value("name", "");
+            server_version_ = result["serverInfo"].value("version", "");
+        }
+    } catch (const json::parse_error& e) {
+        spdlog::warn("Failed to parse MCP SSE init response: {}", e.what());
+    }
+
+    // Send initialized notification
+    send_sse_notification(json({
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/initialized"}
+    }).dump());
+
+    spdlog::info("MCP server '{}' connected via SSE ({} v{})", config_.name, server_name_, server_version_);
+    return true;
+}
+
+std::string McpClient::send_sse_request(const std::string& message) {
+    if (!sse_transport_ || !sse_transport_->is_connected()) return "";
+
+    std::map<std::string, std::string> headers;
+    headers["Content-Type"] = "application/json";
+    if (auto it = config_.env.find("MCP_AUTH_TOKEN"); it != config_.env.end() && !it->second.empty()) {
+        headers["Authorization"] = "Bearer " + it->second;
+    }
+
+    // Use curl to POST and get response
+    std::string response;
+    auto curl = curl_easy_init();
+    if (!curl) return "";
+
+    // Set POST URL
+    curl_easy_setopt(curl, CURLOPT_URL, post_endpoint_.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, message.c_str());
+
+    struct curl_slist* hdr_list = nullptr;
+    for (const auto& [k, v] : headers) {
+        std::string h = k + ": " + v;
+        hdr_list = curl_slist_append(hdr_list, h.c_str());
+    }
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr_list);
+
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(hdr_list);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        spdlog::error("MCP SSE POST failed: {}", curl_easy_strerror(res));
+        return "";
+    }
+
+    // Extract JSON-RPC result from response
+    try {
+        auto j = json::parse(response);
+        if (j.contains("result")) return j["result"].dump();
+        return response;
+    } catch (...) {
+        return response;
+    }
+}
+
+bool McpClient::send_sse_notification(const std::string& message) {
+    if (!sse_transport_ || !sse_transport_->is_connected()) return false;
+
+    std::map<std::string, std::string> headers;
+    headers["Content-Type"] = "application/json";
+    if (auto it = config_.env.find("MCP_AUTH_TOKEN"); it != config_.env.end() && !it->second.empty()) {
+        headers["Authorization"] = "Bearer " + it->second;
+    }
+
+    return sse_transport_->send_message(message);
 }
 
 void McpClient::write_message(const std::string& message) {
