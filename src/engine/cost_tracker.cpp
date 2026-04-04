@@ -12,7 +12,6 @@ void CostTracker::record_usage(const TokenUsage& usage) {
     total_output_tokens_ += usage.output_tokens;
     total_cache_creation_tokens_ += usage.cache_creation_input_tokens;
     total_cache_read_tokens_ += usage.cache_read_input_tokens;
-    api_call_count_++;
 }
 
 void CostTracker::record_model_usage(const std::string& model, const TokenUsage& usage) {
@@ -22,17 +21,13 @@ void CostTracker::record_model_usage(const std::string& model, const TokenUsage&
     mu.output_tokens += usage.output_tokens;
     mu.cache_creation_input_tokens += usage.cache_creation_input_tokens;
     mu.cache_read_input_tokens += usage.cache_read_input_tokens;
-    total_input_tokens_ += usage.input_tokens;
-    total_output_tokens_ += usage.output_tokens;
-    total_cache_creation_tokens_ += usage.cache_creation_input_tokens;
-    total_cache_read_tokens_ += usage.cache_read_input_tokens;
-    api_call_count_++;
+    // Note: totals are NOT incremented here - call record_usage() separately
 }
 
 void CostTracker::record_api_duration(double duration_ms) {
     std::lock_guard<std::mutex> lock(mutex_);
     total_api_duration_ms_ += duration_ms;
-    ++api_call_count_;
+    api_call_count_++;
 }
 
 void CostTracker::record_tool_duration(double duration_ms) {

@@ -40,18 +40,15 @@ QueryOptions QueryEngine::build_query_options(const std::string& user_input) {
     auto sys_ctx = context_builder_.build_system_context(session);
     auto user_ctx = context_builder_.build_user_context(session);
 
-    // Add tool system prompt
-    std::string tools_prompt = tools_.tools_system_prompt();
-
     if (!sys_ctx.content.empty()) {
         options.system_prompts.push_back(sys_ctx);
     }
     if (!user_ctx.content.empty()) {
         options.system_prompts.push_back(user_ctx);
     }
-    if (!tools_prompt.empty()) {
-        options.system_prompts.push_back({tools_prompt, std::nullopt});
-    }
+
+    // Include tools JSON schema for API
+    options.tools_json = tools_.tools_json_array();
 
     // Add user message
     messages_.push_back(Message::user(user_input));
@@ -195,7 +192,7 @@ ToolResult QueryEngine::execute_tool_call(const ToolCall& call) {
     // Convert to ToolResult
     ToolResult result;
     result.tool_use_id = call.id;
-    result.content = output.content;
+    result.content = output.is_error ? output.error_message : output.content;
     result.is_error = output.is_error;
     result.status = output.is_error ? ToolResultStatus::Error : ToolResultStatus::Success;
 

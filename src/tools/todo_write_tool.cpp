@@ -10,7 +10,7 @@ namespace claude {
 ToolInputSchema TodoWriteTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["todos"] = "array — Array of todo items [{id, content, status, priority}]";
+    schema.properties["todos"] = {"array", "Array of todo items, each with id, content, status, and optional priority"};
     schema.required = {"todos"};
     return schema;
 }

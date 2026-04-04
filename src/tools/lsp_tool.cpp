@@ -19,10 +19,10 @@ public:
     ToolInputSchema input_schema() const override {
         ToolInputSchema s;
         s.type = "object";
-        s.properties["language"] = "string: Language (e.g., cpp, python, typescript)";
-        s.properties["uri"] = "string: File URI";
-        s.properties["line"] = "integer: Line number (0-based)";
-        s.properties["character"] = "integer: Column (0-based)";
+        s.properties["language"] = {"string", "Language (e.g., cpp, python, typescript)"};
+        s.properties["uri"] = {"string", "File URI"};
+        s.properties["line"] = {"number", "Line number (0-based)"};
+        s.properties["character"] = {"number", "Column (0-based)"};
         s.required = {"language", "uri", "line", "character"};
         return s;
     }
@@ -66,10 +66,10 @@ public:
     ToolInputSchema input_schema() const override {
         ToolInputSchema s;
         s.type = "object";
-        s.properties["language"] = "string: Language";
-        s.properties["uri"] = "string: File URI";
-        s.properties["line"] = "integer: Line number (0-based)";
-        s.properties["character"] = "integer: Column (0-based)";
+        s.properties["language"] = {"string", "Language"};
+        s.properties["uri"] = {"string", "File URI"};
+        s.properties["line"] = {"number", "Line number (0-based)"};
+        s.properties["character"] = {"number", "Column (0-based)"};
         s.required = {"language", "uri", "line", "character"};
         return s;
     }
@@ -112,8 +112,8 @@ public:
     ToolInputSchema input_schema() const override {
         ToolInputSchema s;
         s.type = "object";
-        s.properties["language"] = "string: Language";
-        s.properties["uri"] = "string: File URI";
+        s.properties["language"] = {"string", "Language"};
+        s.properties["uri"] = {"string", "File URI"};
         s.required = {"language", "uri"};
         return s;
     }
@@ -154,10 +154,10 @@ public:
     ToolInputSchema input_schema() const override {
         ToolInputSchema s;
         s.type = "object";
-        s.properties["language"] = "string: Language";
-        s.properties["uri"] = "string: File URI";
-        s.properties["line"] = "integer: Line (0-based)";
-        s.properties["character"] = "integer: Column (0-based)";
+        s.properties["language"] = {"string", "Language"};
+        s.properties["uri"] = {"string", "File URI"};
+        s.properties["line"] = {"number", "Line (0-based)"};
+        s.properties["character"] = {"number", "Column (0-based)"};
         s.required = {"language", "uri", "line", "character"};
         return s;
     }
@@ -195,11 +195,11 @@ public:
     ToolInputSchema input_schema() const override {
         ToolInputSchema s;
         s.type = "object";
-        s.properties["language"] = "string: Language";
-        s.properties["uri"] = "string: File URI";
-        s.properties["line"] = "integer: Line (0-based)";
-        s.properties["character"] = "integer: Column (0-based)";
-        s.properties["new_name"] = "string: New symbol name";
+        s.properties["language"] = {"string", "Language"};
+        s.properties["uri"] = {"string", "File URI"};
+        s.properties["line"] = {"number", "Line (0-based)"};
+        s.properties["character"] = {"number", "Column (0-based)"};
+        s.properties["new_name"] = {"string", "New symbol name"};
         s.required = {"language", "uri", "line", "character", "new_name"};
         return s;
     }

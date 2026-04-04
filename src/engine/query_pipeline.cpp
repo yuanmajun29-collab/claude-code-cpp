@@ -94,6 +94,18 @@ json QueryPipeline::format_message(const Message& msg) {
                 content.push_back(tool_block);
                 break;
             }
+            case ContentBlock::Type::ToolResult: {
+                json tr = {
+                    {"type", "tool_result"},
+                    {"tool_use_id", block.tool_result.tool_use_id},
+                    {"content", block.tool_result.content}
+                };
+                if (block.tool_result.is_error) {
+                    tr["is_error"] = true;
+                }
+                content.push_back(tr);
+                break;
+            }
             case ContentBlock::Type::Thinking:
                 content.push_back({{"type", "thinking"}, {"thinking", block.thinking}});
                 break;
@@ -189,15 +201,8 @@ Message QueryPipeline::create_tool_result_message(const std::vector<ToolResult>&
 
     for (const auto& result : results) {
         ContentBlock block;
-        block.type = ContentBlock::Type::Text;
-        // Tool results are sent as tool_result content blocks in the API
-        // For internal representation, we store the formatted JSON
-        json tr;
-        tr["type"] = "tool_result";
-        tr["tool_use_id"] = result.tool_use_id;
-        tr["content"] = result.content;
-        if (result.is_error) tr["is_error"] = true;
-        block.text = tr.dump();
+        block.type = ContentBlock::Type::ToolResult;
+        block.tool_result = result;
         msg.content.push_back(block);
     }
     return msg;

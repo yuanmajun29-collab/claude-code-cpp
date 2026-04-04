@@ -35,9 +35,9 @@ static const std::vector<std::pair<std::vector<uint8_t>, std::string>> MAGIC_BYT
 ToolInputSchema FileReadTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["file_path"] = "string — Path to the file to read";
-    schema.properties["offset"] = "number — Line number to start reading from (1-indexed)";
-    schema.properties["limit"] = "number — Maximum number of lines to read";
+    schema.properties["file_path"] = {"string", "The absolute path to the file to read"};
+    schema.properties["offset"] = {"number", "Line number to start reading from (0-indexed)"};
+    schema.properties["limit"] = {"number", "Maximum number of lines to read"};
     schema.required = {"file_path"};
     return schema;
 }

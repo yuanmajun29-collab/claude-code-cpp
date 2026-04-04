@@ -15,9 +15,9 @@ namespace claude {
 ToolInputSchema BashTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["command"] = "string — The shell command to execute";
-    schema.properties["timeout"] = "number — Timeout in seconds (default 120)";
-    schema.properties["description"] = "string — Optional description of what the command does";
+    schema.properties["command"] = {"string", "The shell command to execute"};
+    schema.properties["timeout"] = {"number", "Timeout in seconds (default 120, max 600)"};
+    schema.properties["description"] = {"string", "Optional description of what the command does"};
     schema.required = {"command"};
     return schema;
 }

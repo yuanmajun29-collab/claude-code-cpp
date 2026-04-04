@@ -31,12 +31,12 @@ ToolInputSchema McpTool::input_schema() const {
     if (tool_def_.input_schema.is_object()) {
         auto props = tool_def_.input_schema.value("properties", nlohmann::json::object());
         for (auto& [key, val] : props.items()) {
-            if (val.is_string()) {
-                schema.properties[key] = val.get<std::string>();
-            } else if (val.is_object()) {
+            if (val.is_object()) {
                 std::string type = val.value("type", "string");
                 std::string desc = val.value("description", "");
-                schema.properties[key] = desc.empty() ? type : type + ": " + desc;
+                schema.properties[key] = {type, desc};
+            } else {
+                schema.properties[key] = {"string", ""};
             }
         }
 

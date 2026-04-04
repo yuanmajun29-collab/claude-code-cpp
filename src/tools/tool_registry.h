@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tools/tool_base.h"
+#include <nlohmann/json.hpp>
 #include <unordered_map>
 #include <vector>
 #include <string>
@@ -35,6 +36,9 @@ public:
     std::vector<ToolBase*> tools_by_category(const std::string& category) const;
 
     // Generate JSON array of tool schemas for API request
+    nlohmann::json tools_json_array() const;
+
+    // Legacy: string version
     std::string tools_json_schema_array() const;
 
     // Generate system prompt section describing all tools

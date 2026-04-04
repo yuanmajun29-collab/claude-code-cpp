@@ -13,16 +13,16 @@ namespace claude {
 ToolInputSchema GrepTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["pattern"] = "string — Regular expression pattern to search for";
-    schema.properties["path"] = "string — Directory to search (default: working directory)";
-    schema.properties["include"] = "string — File glob to include (e.g., '*.cpp')";
-    schema.properties["exclude"] = "string — File glob to exclude (e.g., 'test_*')";
-    schema.properties["type"] = "string — File type filter for rg (e.g., 'cpp', 'rust', 'py')";
-    schema.properties["context"] = "number — Context lines before and after match (-C)";
-    schema.properties["before_context"] = "number — Lines before match (-B)";
-    schema.properties["after_context"] = "number — Lines after match (-A)";
-    schema.properties["max_matches"] = "number — Maximum matches to return (default 50)";
-    schema.properties["case_insensitive"] = "boolean — Case insensitive search (-i)";
+    schema.properties["pattern"] = {"string", "Regular expression pattern to search for"};
+    schema.properties["path"] = {"string", "Directory to search (default: working directory)"};
+    schema.properties["include"] = {"string", "File glob to include (e.g., '*.cpp')"};
+    schema.properties["exclude"] = {"string", "File glob to exclude (e.g., 'test_*')"};
+    schema.properties["type"] = {"string", "File type filter for rg (e.g., 'cpp', 'rust', 'py')"};
+    schema.properties["context"] = {"number", "Context lines before and after match (-C)"};
+    schema.properties["before_context"] = {"number", "Lines before match (-B)"};
+    schema.properties["after_context"] = {"number", "Lines after match (-A)"};
+    schema.properties["max_matches"] = {"number", "Maximum matches to return (default 50)"};
+    schema.properties["case_insensitive"] = {"boolean", "Case insensitive search (-i)"};
     schema.required = {"pattern"};
     return schema;
 }

@@ -1,10 +1,12 @@
 #include "tools/glob_tool.h"
 #include "util/file_utils.h"
-#include "util/process_utils.h"
 #include "util/string_utils.h"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <sstream>
+#include <algorithm>
+#include <fnmatch.h>
+#include <spdlog/spdlog.h>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -13,19 +15,12 @@ namespace claude {
 
 const std::vector<std::string>& GlobTool::exclude_patterns() {
     static const std::vector<std::string> excludes = {
-        ".git/", ".git\\",
-        "node_modules/", "node_modules\\",
-        "__pycache__/", "__pycache__\\",
-        ".hg/", ".hg\\",
-        ".svn/", ".svn\\",
-        ".DS_Store",
-        "Thumbs.db",
-        "*.pyc",
-        ".venv/", "venv/",
-        ".env",
-        "dist/", "build/", ".cache/",
-        "target/",  // Rust
-        "vendor/",  // Go
+        ".git", "node_modules", "__pycache__",
+        ".hg", ".svn", ".DS_Store", "Thumbs.db",
+        ".venv", "venv", ".env",
+        "dist", "build", ".cache",
+        "target",  // Rust
+        "vendor",  // Go
     };
     return excludes;
 }
@@ -33,8 +28,8 @@ const std::vector<std::string>& GlobTool::exclude_patterns() {
 ToolInputSchema GlobTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["pattern"] = "string — Glob pattern to match files (e.g., '**/*.cpp', 'src/**/*.h')";
-    schema.properties["path"] = "string — Base directory to search (default: working directory)";
+    schema.properties["pattern"] = {"string", "Glob pattern to match files (e.g., '**/*.cpp', 'src/**/*.h')"};
+    schema.properties["path"] = {"string", "Base directory to search (default: working directory)"};
     schema.required = {"pattern"};
     return schema;
 }
@@ -52,9 +47,42 @@ std::string GlobTool::system_prompt() const {
 - "Makefile" — exact filename match
 
 **Behavior:**
-- Uses system glob matching
+- Uses native C++ directory iteration
 - Excludes .git, node_modules, __pycache__, etc.
-- Returns matching file paths)";
+- Returns matching file paths sorted by modification time
+- Limited to 500 results)";
+}
+
+// Check if a path component should be excluded
+static bool is_excluded_component(const std::string& component,
+                                   const std::vector<std::string>& excludes) {
+    for (const auto& exc : excludes) {
+        if (component == exc) return true;
+    }
+    return false;
+}
+
+// Match a filename against a simple glob pattern (no directory separators)
+static bool match_glob(const std::string& pattern, const std::string& str) {
+    return fnmatch(pattern.c_str(), str.c_str(), 0) == 0;
+}
+
+// Split a pattern by '/' to get path components
+static std::vector<std::string> split_path_pattern(const std::string& pattern) {
+    std::vector<std::string> parts;
+    std::string current;
+    for (char c : pattern) {
+        if (c == '/' || c == '\\') {
+            if (!current.empty()) {
+                parts.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) parts.push_back(current);
+    return parts;
 }
 
 ToolOutput GlobTool::execute(const std::string& input_json, ToolContext& ctx) {
@@ -73,79 +101,105 @@ ToolOutput GlobTool::execute(const std::string& input_json, ToolContext& ctx) {
             base_dir = fs::path(ctx.working_directory) / base_dir;
         }
 
-        // Use find command for glob pattern matching
-        // Convert glob to find-friendly format
-        std::string find_cmd = "find " + base_dir.string() + " -type f";
+        std::error_code ec;
+        base_dir = fs::canonical(base_dir, ec);
+        if (ec || !fs::is_directory(base_dir)) {
+            return ToolOutput::err("Directory not found: " + search_path);
+        }
 
-        // Build exclude conditions
-        for (const auto& exclude : exclude_patterns()) {
-            // Remove trailing slash
-            std::string exc = exclude;
-            if (exc.back() == '/' || exc.back() == '\\') {
-                exc = exc.substr(0, exc.size() - 1);
+        // Determine if pattern has directory components
+        bool is_recursive = pattern.find("**") != std::string::npos;
+        auto pattern_parts = split_path_pattern(pattern);
+
+        // Extract the filename pattern (last component)
+        std::string file_pattern;
+        std::string dir_prefix;
+        if (pattern_parts.empty()) {
+            file_pattern = "*";
+        } else {
+            file_pattern = pattern_parts.back();
+            // Build directory prefix (for patterns like "src/**/*.h")
+            for (size_t i = 0; i + 1 < pattern_parts.size(); i++) {
+                if (pattern_parts[i] != "**") {
+                    if (!dir_prefix.empty()) dir_prefix += "/";
+                    dir_prefix += pattern_parts[i];
+                }
             }
-            find_cmd += " ! -path '*" + exc + "*'";
         }
 
-        // Add name pattern
-        // For simple patterns like "*.cpp", use -name
-        // For "**/*.cpp", use -name with the basename part
-        std::string name_pattern = pattern;
-        auto last_slash = pattern.rfind('/');
-        if (last_slash != std::string::npos) {
-            name_pattern = pattern.substr(last_slash + 1);
-        }
-        // Handle ** prefix
-        if (name_pattern.find("**") == 0) {
-            name_pattern = name_pattern.substr(2);
-            if (name_pattern.find('/') == 0) name_pattern = name_pattern.substr(1);
+        // If we have a non-recursive prefix, adjust base_dir
+        if (!dir_prefix.empty()) {
+            fs::path new_base = base_dir / dir_prefix;
+            if (fs::is_directory(new_base)) {
+                base_dir = new_base;
+            }
         }
 
-        if (!name_pattern.empty() && name_pattern != "*" && name_pattern != "**") {
-            find_cmd += " -name '" + name_pattern + "'";
+        // Collect matching files
+        const size_t MAX_RESULTS = 500;
+        std::vector<std::pair<fs::path, fs::file_time_type>> matches;
+        const auto& excludes = exclude_patterns();
+
+        auto should_exclude = [&excludes](const fs::path& p) -> bool {
+            for (const auto& component : p) {
+                if (is_excluded_component(component.string(), excludes)) return true;
+            }
+            return false;
+        };
+
+        auto iterate = [&](auto iterator) {
+            for (const auto& entry : iterator) {
+                if (matches.size() >= MAX_RESULTS * 2) break;  // Safety limit during iteration
+
+                if (!entry.is_regular_file()) continue;
+
+                // Check exclusions on relative path
+                auto rel = fs::relative(entry.path(), base_dir, ec);
+                if (ec) continue;
+                if (should_exclude(rel)) continue;
+
+                // Match filename against pattern
+                std::string filename = entry.path().filename().string();
+                if (match_glob(file_pattern, filename)) {
+                    fs::file_time_type mtime{};
+                    std::error_code mtime_ec;
+                    mtime = fs::last_write_time(entry.path(), mtime_ec);
+                    matches.push_back({entry.path(), mtime});
+                }
+            }
+        };
+
+        if (is_recursive || file_pattern.find("**") != std::string::npos) {
+            iterate(fs::recursive_directory_iterator(base_dir,
+                fs::directory_options::skip_permission_denied, ec));
+        } else {
+            iterate(fs::directory_iterator(base_dir,
+                fs::directory_options::skip_permission_denied, ec));
         }
 
-        // Limit output
-        find_cmd += " 2>/dev/null | head -500";
-
-        util::ProcessOptions opts;
-        opts.working_directory = ctx.working_directory;
-        opts.timeout_seconds = 30;
-        opts.merge_stderr = true;
-
-        auto result = util::exec_command(find_cmd, opts);
-
-        if (result.timed_out) {
-            return ToolOutput::err("Glob command timed out");
-        }
-
-        if (result.exit_code != 0 && result.stdout_output.empty()) {
-            // find might return 1 for permission errors but still output results
-        }
-
-        if (result.stdout_output.empty()) {
+        if (matches.empty()) {
             return ToolOutput::ok("No files matched pattern: " + pattern);
         }
 
+        // Sort by modification time (newest first)
+        std::sort(matches.begin(), matches.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+
+        // Limit results
+        bool truncated = matches.size() > MAX_RESULTS;
+        if (truncated) matches.resize(MAX_RESULTS);
+
         // Format output
-        auto files = util::split(result.stdout_output, "\n");
         std::ostringstream oss;
-        for (const auto& f : files) {
-            auto trimmed = util::trim(f);
-            if (!trimmed.empty()) {
-                oss << trimmed << "\n";
-            }
+        oss << matches.size() << " files matched";
+        if (truncated) oss << " (showing first " << MAX_RESULTS << ")";
+        oss << ":\n";
+
+        for (const auto& [path, _mtime] : matches) {
+            oss << path.string() << "\n";
         }
 
-        std::string output = oss.str();
-        auto count = util::split(output, "\n");
-        // Count non-empty lines
-        int file_count = 0;
-        for (const auto& line : count) {
-            if (!util::trim(line).empty()) file_count++;
-        }
-
-        return ToolOutput::ok(std::to_string(file_count) + " files matched:\n" + output);
+        return ToolOutput::ok(oss.str());
 
     } catch (const json::parse_error& e) {
         return ToolOutput::err("Invalid JSON input: " + std::string(e.what()));

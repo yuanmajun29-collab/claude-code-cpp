@@ -1,6 +1,8 @@
 #include "tools/tool_registry.h"
 #include <sstream>
 
+using json = nlohmann::json;
+
 namespace claude {
 
 void ToolRegistry::register_tool(std::unique_ptr<ToolBase> tool) {
@@ -43,22 +45,49 @@ std::vector<ToolBase*> ToolRegistry::tools_by_category(const std::string& catego
     return result;
 }
 
-std::string ToolRegistry::tools_json_schema_array() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::ostringstream oss;
-    oss << "[";
-    bool first = true;
-    for (const auto& [_, tool] : tools_) {
-        if (!first) oss << ",";
-        first = false;
-        oss << "{"
-            << "\"name\":\"" << tool->name() << "\","
-            << "\"description\":\"" << tool->description() << "\","
-            << "\"input_schema\":" << /* serialize schema */ "{}"
-            << "}";
+static json schema_to_json(const ToolInputSchema& schema) {
+    json j;
+    j["type"] = schema.type;
+
+    json props = json::object();
+    for (const auto& [name, prop] : schema.properties) {
+        json p;
+        p["type"] = prop.type;
+        if (!prop.description.empty()) {
+            p["description"] = prop.description;
+        }
+        if (!prop.enum_values.empty()) {
+            p["enum"] = prop.enum_values;
+        }
+        if (prop.type == "array" && !prop.items_type.empty()) {
+            p["items"] = json{{"type", prop.items_type}};
+        }
+        props[name] = p;
     }
-    oss << "]";
-    return oss.str();
+    j["properties"] = props;
+
+    if (!schema.required.empty()) {
+        j["required"] = schema.required;
+    }
+
+    return j;
+}
+
+json ToolRegistry::tools_json_array() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    json arr = json::array();
+    for (const auto& [_, tool] : tools_) {
+        json t;
+        t["name"] = tool->name();
+        t["description"] = tool->description();
+        t["input_schema"] = schema_to_json(tool->input_schema());
+        arr.push_back(t);
+    }
+    return arr;
+}
+
+std::string ToolRegistry::tools_json_schema_array() const {
+    return tools_json_array().dump();
 }
 
 std::string ToolRegistry::tools_system_prompt() const {

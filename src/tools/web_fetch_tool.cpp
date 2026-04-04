@@ -22,8 +22,8 @@ static size_t write_cb(void* contents, size_t size, size_t nmemb, void* userp) {
 ToolInputSchema WebFetchTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["url"] = "string — HTTP(S) URL to fetch";
-    schema.properties["max_chars"] = "number — Maximum characters to return (default 50000)";
+    schema.properties["url"] = {"string", "HTTP(S) URL to fetch"};
+    schema.properties["max_chars"] = {"number", "Maximum characters to return (default 50000)"};
     schema.required = {"url"};
     return schema;
 }

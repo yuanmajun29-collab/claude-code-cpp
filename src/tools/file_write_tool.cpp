@@ -16,8 +16,8 @@ namespace claude {
 ToolInputSchema FileWriteTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["file_path"] = "string — Path to the file to write";
-    schema.properties["content"] = "string — Content to write to the file";
+    schema.properties["file_path"] = {"string", "The absolute path to the file to write"};
+    schema.properties["content"] = {"string", "The content to write to the file"};
     schema.required = {"file_path", "content"};
     return schema;
 }
