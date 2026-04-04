@@ -44,6 +44,7 @@ enum class PermissionResult {
 struct ToolContext {
     std::string working_directory;
     SessionConfig session_config;
+    std::vector<std::string> extra_env;  // Additional env vars for subprocesses ("KEY=value")
     std::function<PermissionResult(const std::string&, const std::string&)> check_permission;
     std::function<void(const std::string&)> log_info;
     std::function<void(const std::string&)> log_error;

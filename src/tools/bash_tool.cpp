@@ -133,6 +133,11 @@ ToolOutput BashTool::execute(const std::string& input_json, ToolContext& ctx) {
         opts.max_output_bytes = 50000;
         opts.merge_stderr = false;
 
+        // Inject environment variables from context
+        if (!ctx.extra_env.empty()) {
+            opts.extra_env = ctx.extra_env;
+        }
+
         auto result = util::exec_command(command, opts);
 
         // Format output
