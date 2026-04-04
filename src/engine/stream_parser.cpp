@@ -27,8 +27,8 @@ bool StreamParser::feed_event(const StreamEvent& event) {
             if (event.usage_delta) {
                 usage_.output_tokens += event.usage_delta->output_tokens;
             }
-            if (event.delta_text && !event.delta_text->empty() && *event.delta_text != "null") {
-                stop_reason_ = *event.delta_text;
+            if (event.stop_reason && !event.stop_reason->empty()) {
+                stop_reason_ = *event.stop_reason;
             }
             break;
 

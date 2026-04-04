@@ -29,6 +29,38 @@ void QueryEngine::clear_history() {
     context_builder_.clear_cache();
 }
 
+size_t QueryEngine::compact(size_t keep_recent) {
+    if (messages_.size() <= keep_recent) {
+        return 0;
+    }
+    size_t removed = messages_.size() - keep_recent;
+
+    // Ensure we don't split a tool_use / tool_result pair.
+    // Walk forward from the trim point to find a clean boundary
+    // (a user message that isn't a tool result).
+    size_t trim_start = removed;
+    while (trim_start < messages_.size()) {
+        const auto& msg = messages_[trim_start];
+        // A clean boundary is a plain user message (not tool result)
+        if (msg.role == MessageRole::User &&
+            !msg.content.empty() &&
+            msg.content[0].type == ContentBlock::Type::Text) {
+            break;
+        }
+        ++trim_start;
+    }
+
+    if (trim_start >= messages_.size()) {
+        // Can't find a clean boundary; keep everything
+        return 0;
+    }
+
+    removed = trim_start;
+    messages_.erase(messages_.begin(), messages_.begin() + static_cast<long>(removed));
+    spdlog::info("Compacted conversation: removed {} messages, {} remaining", removed, messages_.size());
+    return removed;
+}
+
 QueryOptions QueryEngine::build_query_options(const std::string& user_input) {
     auto& session = state_.current_session();
 
@@ -220,6 +252,11 @@ void QueryEngine::handle_stream_event(const StreamEvent& event) {
                 display_text(*event.delta_text);
             }
             break;
+        case StreamEventType::ContentBlockStart:
+            if (event.content_block && event.content_block->type == ContentBlock::Type::Thinking) {
+                display_thinking(event.content_block->thinking);
+            }
+            break;
         default:
             break;
     }
@@ -245,8 +282,10 @@ void QueryEngine::display_text(const std::string& text) {
     std::cout << text << std::flush;
 }
 
-void QueryEngine::display_thinking(const std::string& /*thinking*/) {
-    // Could display thinking in debug mode
+void QueryEngine::display_thinking(const std::string& thinking) {
+    if (!thinking.empty()) {
+        spdlog::debug("Thinking: {}", thinking.substr(0, 200));
+    }
 }
 
 }  // namespace claude

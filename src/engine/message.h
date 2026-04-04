@@ -148,6 +148,7 @@ struct StreamEvent {
     std::optional<std::string> delta_text;
     std::optional<TokenUsage> usage_delta;
     std::optional<std::string> error_message;
+    std::optional<std::string> stop_reason;  // From message_delta.delta.stop_reason
 };
 
 // ============================================================

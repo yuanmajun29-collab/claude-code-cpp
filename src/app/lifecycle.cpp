@@ -233,13 +233,12 @@ int Application::run_repl() {
                 }
                 continue;
             } else if (input == "/compact") {
-                // Simple compaction: keep last 20 messages
-                auto& msgs = engine_->messages();
-                if (msgs.size() > 20) {
-                    // This would need a proper compaction implementation
-                    std::cout << "⚠ Compaction not yet implemented\n";
+                auto removed = engine_->compact(20);
+                if (removed > 0) {
+                    std::cout << "✓ Compacted: removed " << removed << " messages, "
+                              << engine_->messages().size() << " remaining\n";
                 } else {
-                    std::cout << "✓ Context fits in window\n";
+                    std::cout << "✓ Context already compact (" << engine_->messages().size() << " messages)\n";
                 }
                 continue;
             } else {

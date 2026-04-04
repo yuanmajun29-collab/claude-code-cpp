@@ -44,7 +44,7 @@ void setup_cli(CLI::App& app, AppConfig& config) {
     // Display options
     app.add_option("--theme,-t", config.theme, "UI theme (dark, light)");
     app.add_flag("-v,--verbose", config.verbose, "Verbose output");
-    app.add_flag("--no-color", config.color, "Disable colored output");
+    app.add_flag("--no-color,!--color", config.no_color, "Disable colored output");
 
     // Non-interactive mode
     app.add_option("prompt", config.prompt, "Prompt to send (non-interactive mode)");
@@ -81,6 +81,11 @@ AppConfig parse_cli(int argc, char** argv) {
             std::cerr << app.help() << std::endl;
             throw;
         }
+    }
+
+    // Apply --no-color flag
+    if (config.no_color) {
+        config.color = false;
     }
 
     return config;
