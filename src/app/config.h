@@ -27,6 +27,7 @@ struct AppConfig {
     std::string theme = "dark";
     bool verbose = false;
     bool color = true;
+    bool no_color = false;  // CLI flag: --no-color
 
     // Working directory
     std::string working_directory;

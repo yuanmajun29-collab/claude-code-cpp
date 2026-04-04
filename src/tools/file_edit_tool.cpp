@@ -16,10 +16,10 @@ namespace claude {
 ToolInputSchema FileEditTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["file_path"] = "string — Path to the file to edit";
-    schema.properties["old_string"] = "string — Exact text to find (for single replacement)";
-    schema.properties["new_string"] = "string — Replacement text (for single replacement)";
-    schema.properties["edits"] = "array — Array of {old_string, new_string} for multiple replacements";
+    schema.properties["file_path"] = {"string", "The absolute path to the file to edit"};
+    schema.properties["old_string"] = {"string", "The exact text to find and replace (must be unique in the file)"};
+    schema.properties["new_string"] = {"string", "The replacement text"};
+    schema.properties["edits"] = {"array", "Array of {old_string, new_string} objects for multiple replacements"};
     schema.required = {"file_path"};
     return schema;
 }

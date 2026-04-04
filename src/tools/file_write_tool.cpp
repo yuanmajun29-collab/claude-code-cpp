@@ -16,8 +16,8 @@ namespace claude {
 ToolInputSchema FileWriteTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["file_path"] = "string — Path to the file to write";
-    schema.properties["content"] = "string — Content to write to the file";
+    schema.properties["file_path"] = {"string", "The absolute path to the file to write"};
+    schema.properties["content"] = {"string", "The content to write to the file"};
     schema.required = {"file_path", "content"};
     return schema;
 }
@@ -140,6 +140,15 @@ ToolOutput FileWriteTool::execute(const std::string& input_json, ToolContext& ct
                 }
             }
         }
+
+        // Add file timestamp
+        auto mtime = fs::last_write_time(path);
+        auto sctp = std::chrono::time_point_cast<std::chrono::seconds>(
+            std::chrono::clock_cast<std::chrono::system_clock>(mtime));
+        auto tt = std::chrono::system_clock::to_time_t(sctp);
+        char time_buf[32];
+        std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", std::localtime(&tt));
+        result << "Modified: " << time_buf << "\n";
 
         spdlog::debug("Wrote {} bytes to {}", size, path.string());
         return ToolOutput::ok(result.str());

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 #include <variant>
@@ -62,12 +63,20 @@ struct ToolResult {
 
 // Content block variants for assistant messages
 struct ContentBlock {
-    enum class Type { Text, ToolUse, Thinking, Image };
-    Type type;
+    enum class Type { Text, ToolUse, ToolResult, Thinking, Image };
+    Type type = Type::Text;
     std::string text;
     ToolCall tool_call;
+    ToolResult tool_result;
     std::string thinking;
     std::string image_url;
+
+    static ContentBlock make_text(const std::string& t) {
+        ContentBlock b;
+        b.type = Type::Text;
+        b.text = t;
+        return b;
+    }
 };
 
 // Base message
@@ -139,6 +148,7 @@ struct StreamEvent {
     std::optional<std::string> delta_text;
     std::optional<TokenUsage> usage_delta;
     std::optional<std::string> error_message;
+    std::optional<std::string> stop_reason;  // From message_delta.delta.stop_reason
 };
 
 // ============================================================
@@ -167,6 +177,7 @@ struct QueryOptions {
     std::vector<Message> messages;
     std::vector<std::string> stop_sequences;
     bool stream = true;
+    nlohmann::json tools_json;  // Tools array for API request
 
     std::string to_debug_string() const;
 };

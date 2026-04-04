@@ -6,21 +6,137 @@
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <chrono>
+#include <thread>
 
 using json = nlohmann::json;
 
 namespace claude {
 
-// libcurl write callback for string
-static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+// libcurl header callback
+static size_t header_callback(void* contents, size_t size, size_t nmemb, void* userp) {
     auto* str = static_cast<std::string*>(userp);
     size_t total_size = size * nmemb;
     str->append(static_cast<char*>(contents), total_size);
     return total_size;
 }
 
-// libcurl header callback
-static size_t header_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+// Context for real-time SSE streaming
+struct StreamingContext {
+    SSEParser parser;
+    AnthropicClient::StreamCallback callback;
+    QueryResponse* response = nullptr;
+    ContentBlock* current_block = nullptr;
+    std::string current_tool_input_buffer;
+    std::string line_buffer;  // Accumulate partial lines
+    std::string current_event_type;
+    bool* aborted = nullptr;
+
+    void process_sse_line(const std::string& line) {
+        auto parsed = parser.parse_line(line);
+        if (!parsed) return;
+
+        if (!parsed->event.empty()) {
+            current_event_type = parsed->event;
+        }
+        if (parsed->data.empty()) return;
+
+        auto event = parser.parse_event(current_event_type, parsed->data);
+        if (callback) callback(event);
+
+        switch (event.type) {
+            case StreamEventType::MessageStart:
+                if (event.message) {
+                    response->message.id = event.message->id;
+                    response->message.model = event.message->model;
+                    response->message.usage = event.message->usage;
+                }
+                break;
+            case StreamEventType::MessageDelta:
+                if (event.usage_delta) {
+                    response->usage.output_tokens += event.usage_delta->output_tokens;
+                }
+                if (event.stop_reason && !event.stop_reason->empty()) {
+                    response->stop_reason = *event.stop_reason;
+                }
+                break;
+            case StreamEventType::MessageStop:
+                break;
+            case StreamEventType::ContentBlockStart:
+                if (event.content_block) {
+                    response->message.content.push_back(*event.content_block);
+                    current_block = &response->message.content.back();
+                    if (current_block->type == ContentBlock::Type::ToolUse) {
+                        current_tool_input_buffer.clear();
+                    }
+                }
+                break;
+            case StreamEventType::ContentBlockDelta:
+                if (current_block) {
+                    if (current_block->type == ContentBlock::Type::Text && event.delta_text) {
+                        current_block->text += *event.delta_text;
+                    } else if (current_block->type == ContentBlock::Type::Thinking && event.delta_text) {
+                        current_block->thinking += *event.delta_text;
+                    } else if (current_block->type == ContentBlock::Type::ToolUse && event.delta_text) {
+                        current_tool_input_buffer += *event.delta_text;
+                    }
+                }
+                break;
+            case StreamEventType::ContentBlockStop:
+                if (current_block && current_block->type == ContentBlock::Type::ToolUse) {
+                    current_block->tool_call.input_json = current_tool_input_buffer;
+                    current_tool_input_buffer.clear();
+                }
+                current_block = nullptr;
+                break;
+            case StreamEventType::Error:
+                if (event.error_message) {
+                    response->stop_reason = "error";
+                    response->message.content.push_back(
+                        ContentBlock::make_text(*event.error_message));
+                }
+                break;
+            default:
+                break;
+        }
+        current_event_type.clear();
+    }
+};
+
+// Streaming write callback: processes SSE events in real-time
+static size_t streaming_write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+    auto* ctx = static_cast<StreamingContext*>(userp);
+    size_t total_size = size * nmemb;
+
+    if (ctx->aborted && *ctx->aborted) {
+        return 0;  // Abort transfer
+    }
+
+    // Append to line buffer and process complete lines
+    ctx->line_buffer.append(static_cast<char*>(contents), total_size);
+
+    size_t pos = 0;
+    while (pos < ctx->line_buffer.size()) {
+        auto nl = ctx->line_buffer.find('\n', pos);
+        if (nl == std::string::npos) break;
+
+        std::string line = ctx->line_buffer.substr(pos, nl - pos);
+        // Remove \r
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+
+        ctx->process_sse_line(line);
+        pos = nl + 1;
+    }
+
+    // Keep remaining partial line
+    if (pos > 0) {
+        ctx->line_buffer = ctx->line_buffer.substr(pos);
+    }
+
+    return total_size;
+}
+
+// Non-streaming write callback (collects full body)
+static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
     auto* str = static_cast<std::string*>(userp);
     size_t total_size = size * nmemb;
     str->append(static_cast<char*>(contents), total_size);
@@ -148,6 +264,18 @@ std::string AnthropicClient::build_request_body(const QueryOptions& options) {
                     content.push_back(tool_block);
                     break;
                 }
+                case ContentBlock::Type::ToolResult: {
+                    json tr = {
+                        {"type", "tool_result"},
+                        {"tool_use_id", block.tool_result.tool_use_id},
+                        {"content", block.tool_result.content}
+                    };
+                    if (block.tool_result.is_error) {
+                        tr["is_error"] = true;
+                    }
+                    content.push_back(tr);
+                    break;
+                }
                 case ContentBlock::Type::Thinking:
                     content.push_back({{"type", "thinking"}, {"thinking", block.thinking}});
                     break;
@@ -156,6 +284,11 @@ std::string AnthropicClient::build_request_body(const QueryOptions& options) {
             }
         }
         messages.push_back(m);
+    }
+
+    // Tools
+    if (options.tools_json.is_array() && !options.tools_json.empty()) {
+        body["tools"] = options.tools_json;
     }
 
     // Stop sequences
@@ -176,11 +309,8 @@ QueryResponse AnthropicClient::process_json_response(const std::string& response
 
         if (j.contains("error")) {
             response.stop_reason = "error";
-            response.message.content.push_back({
-                ContentBlock::Type::Text,
-                "API Error: " + j["error"].value("message", "unknown"),
-                {}, {}, ""
-            });
+            response.message.content.push_back(ContentBlock::make_text(
+                "API Error: " + j["error"].value("message", "unknown")));
             return response;
         }
 
@@ -219,126 +349,10 @@ QueryResponse AnthropicClient::process_json_response(const std::string& response
         }
     } catch (const json::parse_error& e) {
         response.stop_reason = "error";
-        response.message.content.push_back({
-            ContentBlock::Type::Text,
-            "JSON parse error: " + std::string(e.what()),
-            {}, {}, ""
-        });
+        response.message.content.push_back(ContentBlock::make_text(
+            "JSON parse error: " + std::string(e.what())));
         spdlog::error("API response parse error: {}", e.what());
     }
-    return response;
-}
-
-QueryResponse AnthropicClient::process_sse_stream(const std::string& response_body,
-                                                    StreamCallback callback) {
-    QueryResponse response;
-    SSEParser parser;
-    ContentBlock* current_block = nullptr;
-    std::string current_tool_input_buffer;
-
-    std::istringstream stream(response_body);
-    std::string line;
-    std::string current_event_type;
-    std::string current_data;
-
-    while (std::getline(stream, line)) {
-        // Remove \r
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-
-        auto parsed = parser.parse_line(line);
-        if (!parsed) continue;
-
-        if (!parsed->event.empty()) {
-            current_event_type = parsed->event;
-        }
-        if (!parsed->data.empty()) {
-            current_data = parsed->data;
-        }
-
-        // Process complete events (data field present)
-        if (!parsed->data.empty()) {
-            auto event = parser.parse_event(current_event_type, parsed->data);
-
-            if (callback) callback(event);
-
-            switch (event.type) {
-                case StreamEventType::MessageStart:
-                    if (event.message) {
-                        response.message.id = event.message->id;
-                        response.message.model = event.message->model;
-                        response.message.usage = event.message->usage;
-                    }
-                    break;
-
-                case StreamEventType::MessageDelta:
-                    if (event.usage_delta) {
-                        response.usage.output_tokens += event.usage_delta->output_tokens;
-                    }
-                    if (event.delta_text && !event.delta_text->empty() && event.delta_text != "null") {
-                        response.stop_reason = *event.delta_text;
-                    }
-                    break;
-
-                case StreamEventType::MessageStop:
-                    break;
-
-                case StreamEventType::ContentBlockStart:
-                    if (event.content_block) {
-                        response.message.content.push_back(*event.content_block);
-                        current_block = &response.message.content.back();
-
-                        // If tool_use block, prepare input accumulator
-                        if (current_block->type == ContentBlock::Type::ToolUse) {
-                            current_tool_input_buffer.clear();
-                        }
-                    }
-                    break;
-
-                case StreamEventType::ContentBlockDelta:
-                    if (current_block) {
-                        if (current_block->type == ContentBlock::Type::Text && event.delta_text) {
-                            current_block->text += *event.delta_text;
-                        } else if (current_block->type == ContentBlock::Type::Thinking && event.delta_text) {
-                            current_block->thinking += *event.delta_text;
-                        } else if (current_block->type == ContentBlock::Type::ToolUse && event.delta_text) {
-                            current_tool_input_buffer += *event.delta_text;
-                        }
-                    }
-                    break;
-
-                case StreamEventType::ContentBlockStop:
-                    if (current_block && current_block->type == ContentBlock::Type::ToolUse) {
-                        current_block->tool_call.input_json = current_tool_input_buffer;
-                        current_tool_input_buffer.clear();
-                    }
-                    current_block = nullptr;
-                    break;
-
-                case StreamEventType::Error:
-                    if (event.error_message) {
-                        response.stop_reason = "error";
-                        response.message.content.push_back({
-                            ContentBlock::Type::Text,
-                            *event.error_message,
-                            {}, {}, ""
-                        });
-                    }
-                    break;
-
-                default:
-                    break;
-            }
-
-            // Reset event type for next event
-            current_event_type.clear();
-        }
-    }
-
-    // Check if response has tool calls
-    response.stopped_by_tool = (response.stop_reason == "tool_use");
-
     return response;
 }
 
@@ -346,9 +360,7 @@ QueryResponse AnthropicClient::create_message(const QueryOptions& options) {
     if (busy_) {
         QueryResponse err;
         err.stop_reason = "error";
-        err.message.content.push_back({
-            ContentBlock::Type::Text, "Another request is in progress", {}, {}, ""
-        });
+        err.message.content.push_back(ContentBlock::make_text("Another request is in progress"));
         return err;
     }
 
@@ -368,9 +380,7 @@ QueryResponse AnthropicClient::create_message_stream(const QueryOptions& options
 
     if (!impl_->curl) {
         response.stop_reason = "error";
-        response.message.content.push_back({
-            ContentBlock::Type::Text, "Failed to initialize HTTP client", {}, {}, ""
-        });
+        response.message.content.push_back(ContentBlock::make_text("Failed to initialize HTTP client"));
         busy_ = false;
         return response;
     }
@@ -404,9 +414,18 @@ QueryResponse AnthropicClient::create_message_stream(const QueryOptions& options
 
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-    // Write callbacks
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+    // Setup streaming or non-streaming write callback
+    StreamingContext stream_ctx;
+    if (options.stream && callback) {
+        stream_ctx.callback = callback;
+        stream_ctx.response = &response;
+        stream_ctx.aborted = &aborted_;
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, streaming_write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &stream_ctx);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+    }
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response_headers);
 
@@ -426,57 +445,110 @@ QueryResponse AnthropicClient::create_message_stream(const QueryOptions& options
     spdlog::debug("Sending API request to {} (model: {}, stream: {})",
                   url, options.model.model_id, options.stream);
 
-    CURLcode res = curl_easy_perform(curl);
+    // Retry loop with exponential backoff for transient errors
+    constexpr int max_retries = 3;
+    constexpr int retryable_codes[] = {429, 500, 502, 503, 529};
+
+    CURLcode res = CURLE_OK;
+    long http_code = 0;
+
+    for (int attempt = 0; attempt <= max_retries; ++attempt) {
+        if (aborted_) break;
+
+        if (attempt > 0) {
+            // Exponential backoff: 2s, 4s, 8s
+            int delay_s = 1 << attempt;
+            spdlog::warn("Retrying API request (attempt {}/{}) after {}s...", attempt, max_retries, delay_s);
+            std::this_thread::sleep_for(std::chrono::seconds(delay_s));
+
+            // Reset state for retry
+            response_body.clear();
+            response_headers.clear();
+            response = QueryResponse{};
+            if (options.stream && callback) {
+                stream_ctx = StreamingContext{};
+                stream_ctx.callback = callback;
+                stream_ctx.response = &response;
+                stream_ctx.aborted = &aborted_;
+                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &stream_ctx);
+            } else {
+                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+            }
+        }
+
+        res = curl_easy_perform(curl);
+        http_code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+        if (aborted_) break;
+
+        // Check if retryable
+        bool should_retry = false;
+        if (res != CURLE_OK) {
+            // Network errors are retryable
+            should_retry = (res == CURLE_OPERATION_TIMEDOUT || res == CURLE_COULDNT_CONNECT ||
+                           res == CURLE_RECV_ERROR || res == CURLE_SEND_ERROR);
+        } else if (http_code != 200) {
+            for (int code : retryable_codes) {
+                if (http_code == code) { should_retry = true; break; }
+            }
+        }
+
+        if (!should_retry || attempt == max_retries) break;
+
+        spdlog::warn("Transient error (HTTP {} / curl {}), will retry", http_code, static_cast<int>(res));
+    }
 
     // Cleanup headers
     curl_slist_free_all(headers);
 
-    if (res != CURLE_OK) {
+    if (res != CURLE_OK && !aborted_) {
         response.stop_reason = "error";
         std::string err_msg = "HTTP request failed: " + std::string(curl_easy_strerror(res));
-        response.message.content.push_back({
-            ContentBlock::Type::Text, err_msg, {}, {}, ""
-        });
+        response.message.content.push_back(ContentBlock::make_text(err_msg));
         spdlog::error("API request failed: {}", err_msg);
         busy_ = false;
         return response;
     }
 
-    // Get HTTP response code
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-
-    if (http_code != 200) {
+    if (http_code != 200 && !aborted_) {
+        std::string err_prefix;
+        if (http_code == 401) {
+            err_prefix = "Authentication error (HTTP 401): Invalid API key. ";
+        } else if (http_code == 429) {
+            err_prefix = "Rate limited (HTTP 429): ";
+        } else if (http_code == 403) {
+            err_prefix = "Forbidden (HTTP 403): ";
+        } else {
+            err_prefix = "API Error (HTTP " + std::to_string(http_code) + "): ";
+        }
         spdlog::error("API returned HTTP {}", http_code);
-        // Try to parse error from response
+        std::string err_body = options.stream ? "" : response_body;
         try {
-            auto j = json::parse(response_body);
-            if (j.contains("error")) {
-                std::string msg = j["error"].value("message", response_body);
-                response.stop_reason = "error";
-                response.message.content.push_back({
-                    ContentBlock::Type::Text, "API Error (HTTP " + std::to_string(http_code) + "): " + msg, {}, {}, ""
-                });
+            if (!err_body.empty()) {
+                auto j = json::parse(err_body);
+                if (j.contains("error")) {
+                    std::string msg = j["error"].value("message", err_body);
+                    response.stop_reason = "error";
+                    response.message.content.push_back(ContentBlock::make_text(err_prefix + msg));
+                } else {
+                    response.stop_reason = "error";
+                    response.message.content.push_back(ContentBlock::make_text(err_prefix + err_body));
+                }
             } else {
                 response.stop_reason = "error";
-                response.message.content.push_back({
-                    ContentBlock::Type::Text, "API Error (HTTP " + std::to_string(http_code) + "): " + response_body, {}, {}, ""
-                });
+                response.message.content.push_back(ContentBlock::make_text(err_prefix + "unknown error"));
             }
         } catch (...) {
             response.stop_reason = "error";
-            response.message.content.push_back({
-                ContentBlock::Type::Text, "API Error (HTTP " + std::to_string(http_code) + "): " + response_body, {}, {}, ""
-            });
+            response.message.content.push_back(ContentBlock::make_text(err_prefix + err_body));
         }
         busy_ = false;
         return response;
     }
 
-    // Parse response
-    if (options.stream) {
-        response = process_sse_stream(response_body, callback);
-    } else {
+    // For non-streaming mode, parse the collected response body
+    if (!options.stream || !callback) {
         response = process_json_response(response_body);
     }
 

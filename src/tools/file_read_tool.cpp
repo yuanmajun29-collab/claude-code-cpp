@@ -35,10 +35,15 @@ static const std::vector<std::pair<std::vector<uint8_t>, std::string>> MAGIC_BYT
 ToolInputSchema FileReadTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["file_path"] = "string — Path to the file to read";
-    schema.properties["offset"] = "number — Line number to start reading from (1-indexed)";
-    schema.properties["limit"] = "number — Maximum number of lines to read";
-    schema.required = {"file_path"};
+    schema.properties["file_path"] = {"string", "The absolute path to the file to read"};
+    ToolPropertySchema file_paths_prop;
+    file_paths_prop.type = "array";
+    file_paths_prop.description = "Multiple file paths to read in batch (alternative to file_path)";
+    file_paths_prop.items_type = "string";
+    schema.properties["file_paths"] = file_paths_prop;
+    schema.properties["offset"] = {"number", "Line number to start reading from (0-indexed)"};
+    schema.properties["limit"] = {"number", "Maximum number of lines to read"};
+    // Neither file_path nor file_paths is strictly required — we check in execute()
     return schema;
 }
 
@@ -154,6 +159,48 @@ ToolOutput FileReadTool::read_binary(const std::string& path) const {
     return ToolOutput::ok(output.str());
 }
 
+ToolOutput FileReadTool::read_single_file(const std::string& file_path, int offset, int limit, ToolContext& ctx) {
+    // Expand home directory
+    fs::path path = util::expand_home(file_path);
+
+    // Resolve relative paths against working directory
+    if (path.is_relative()) {
+        path = fs::path(ctx.working_directory) / path;
+    }
+
+    // Normalize
+    std::error_code ec;
+    path = fs::canonical(path, ec);
+    if (ec) {
+        return ToolOutput::err("File not found: " + file_path);
+    }
+
+    if (!fs::exists(path)) {
+        return ToolOutput::err("File not found: " + file_path);
+    }
+
+    if (!fs::is_regular_file(path)) {
+        return ToolOutput::err("Not a regular file: " + file_path);
+    }
+
+    // Check file size limit (100MB)
+    auto file_size = fs::file_size(path);
+    if (file_size > 100 * 1024 * 1024) {
+        return ToolOutput::err("File too large: " + util::format_bytes(file_size) + " (max 100MB)");
+    }
+
+    // Detect type and route to appropriate reader
+    std::string mime = detect_mime_type(path.string());
+
+    if (util::starts_with(mime, "image/")) {
+        return read_image(path.string());
+    } else if (mime == "application/octet-stream" || util::is_binary_file(path)) {
+        return read_binary(path.string());
+    } else {
+        return read_text(path.string(), offset, limit);
+    }
+}
+
 ToolOutput FileReadTool::execute(const std::string& input_json, ToolContext& ctx) {
     try {
         auto j = json::parse(input_json);
@@ -161,49 +208,49 @@ ToolOutput FileReadTool::execute(const std::string& input_json, ToolContext& ctx
         int offset = j.value("offset", 0);
         int limit = j.value("limit", 0);
 
-        if (file_path.empty()) {
-            return ToolOutput::err("No file path specified");
+        // Check for batch mode
+        std::vector<std::string> paths;
+        if (j.contains("file_paths") && j["file_paths"].is_array()) {
+            for (const auto& p : j["file_paths"]) {
+                if (p.is_string()) paths.push_back(p.get<std::string>());
+            }
         }
 
-        // Expand home directory
-        fs::path path = util::expand_home(file_path);
-
-        // Resolve relative paths against working directory
-        if (path.is_relative()) {
-            path = fs::path(ctx.working_directory) / path;
+        if (paths.empty() && !file_path.empty()) {
+            paths.push_back(file_path);
         }
 
-        // Normalize
-        std::error_code ec;
-        path = fs::canonical(path, ec);
-        if (ec) {
-            return ToolOutput::err("File not found: " + file_path);
+        if (paths.empty()) {
+            return ToolOutput::err("No file path specified. Use 'file_path' or 'file_paths'.");
         }
 
-        if (!fs::exists(path)) {
-            return ToolOutput::err("File not found: " + file_path);
+        // Single file
+        if (paths.size() == 1) {
+            return read_single_file(paths[0], offset, limit, ctx);
         }
 
-        if (!fs::is_regular_file(path)) {
-            return ToolOutput::err("Not a regular file: " + file_path);
+        // Batch mode: read multiple files
+        std::ostringstream combined;
+        int success_count = 0;
+        int error_count = 0;
+
+        for (const auto& p : paths) {
+            combined << "=== " << p << " ===\n";
+            auto result = read_single_file(p, offset, limit, ctx);
+            if (result.is_error) {
+                combined << "Error: " << result.error_message << "\n\n";
+                error_count++;
+            } else {
+                combined << result.content << "\n\n";
+                success_count++;
+            }
         }
 
-        // Check file size limit (100MB)
-        auto file_size = fs::file_size(path);
-        if (file_size > 100 * 1024 * 1024) {
-            return ToolOutput::err("File too large: " + util::format_bytes(file_size) + " (max 100MB)");
-        }
+        combined << "[Read " << success_count << " files";
+        if (error_count > 0) combined << ", " << error_count << " errors";
+        combined << "]\n";
 
-        // Detect type and route to appropriate reader
-        std::string mime = detect_mime_type(path.string());
-
-        if (util::starts_with(mime, "image/")) {
-            return read_image(path.string());
-        } else if (mime == "application/octet-stream" || util::is_binary_file(path)) {
-            return read_binary(path.string());
-        } else {
-            return read_text(path.string(), offset, limit);
-        }
+        return ToolOutput::ok(combined.str());
 
     } catch (const json::parse_error& e) {
         return ToolOutput::err("Invalid JSON input: " + std::string(e.what()));

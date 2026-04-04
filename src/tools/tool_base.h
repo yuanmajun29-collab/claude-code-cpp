@@ -13,10 +13,23 @@ namespace claude {
 // Tool System - Abstract Base
 // ============================================================
 
+// JSON Schema property definition for a tool parameter
+struct ToolPropertySchema {
+    std::string type;                     // "string", "number", "boolean", "array", "object"
+    std::string description;
+    std::vector<std::string> enum_values; // optional enum constraint
+    // For array items
+    std::string items_type;               // type of array items (if type == "array")
+
+    ToolPropertySchema() = default;
+    ToolPropertySchema(const std::string& t, const std::string& d)
+        : type(t), description(d) {}
+};
+
 // JSON Schema fragment for tool input
 struct ToolInputSchema {
     std::string type = "object";
-    std::unordered_map<std::string, std::string> properties;  // name -> type description
+    std::unordered_map<std::string, ToolPropertySchema> properties;
     std::vector<std::string> required;
 };
 
@@ -31,6 +44,7 @@ enum class PermissionResult {
 struct ToolContext {
     std::string working_directory;
     SessionConfig session_config;
+    std::vector<std::string> extra_env;  // Additional env vars for subprocesses ("KEY=value")
     std::function<PermissionResult(const std::string&, const std::string&)> check_permission;
     std::function<void(const std::string&)> log_info;
     std::function<void(const std::string&)> log_error;

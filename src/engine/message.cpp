@@ -41,7 +41,7 @@ std::string QueryOptions::to_debug_string() const {
     oss << "model=" << model.model_id
         << " max_tokens=" << model.max_tokens
         << " messages=" << messages.size()
-        << " tools=" << "N/A"  // tools are separate
+        << " tools=" << (tools_json.is_array() ? std::to_string(tools_json.size()) : "0")
         << " stream=" << (stream ? "true" : "false");
     return oss.str();
 }
@@ -50,10 +50,17 @@ std::string QueryOptions::to_debug_string() const {
 // Message builders
 // ============================================================
 
+static ContentBlock make_text_block(const std::string& text) {
+    ContentBlock block;
+    block.type = ContentBlock::Type::Text;
+    block.text = text;
+    return block;
+}
+
 Message Message::system(const std::string& text) {
     Message msg;
     msg.role = MessageRole::System;
-    msg.content.push_back({ContentBlock::Type::Text, text, {}, "", ""});
+    msg.content.push_back(make_text_block(text));
     msg.timestamp = std::chrono::system_clock::now();
     return msg;
 }
@@ -61,7 +68,7 @@ Message Message::system(const std::string& text) {
 Message Message::user(const std::string& text) {
     Message msg;
     msg.role = MessageRole::User;
-    msg.content.push_back({ContentBlock::Type::Text, text, {}, "", ""});
+    msg.content.push_back(make_text_block(text));
     msg.timestamp = std::chrono::system_clock::now();
     return msg;
 }
@@ -69,18 +76,22 @@ Message Message::user(const std::string& text) {
 Message Message::assistant(const std::string& text, const std::string& model_id) {
     Message msg;
     msg.role = MessageRole::Assistant;
-    msg.content.push_back({ContentBlock::Type::Text, text, {}, "", ""});
+    msg.content.push_back(make_text_block(text));
     msg.model = model_id;
     msg.timestamp = std::chrono::system_clock::now();
     return msg;
 }
 
-Message Message::tool_result(const std::string& /*tool_use_id*/, const std::string& content, bool /*is_error*/) {
+Message Message::tool_result(const std::string& tool_use_id, const std::string& content, bool is_error) {
     Message msg;
-    msg.role = MessageRole::Tool;
-    // Tool results are sent differently in the API
-    // This is a simplified representation
-    msg.content.push_back({ContentBlock::Type::Text, content, {}, "", ""});
+    msg.role = MessageRole::User;  // Tool results are sent as user messages per Anthropic API
+    ContentBlock block;
+    block.type = ContentBlock::Type::ToolResult;
+    block.tool_result.tool_use_id = tool_use_id;
+    block.tool_result.content = content;
+    block.tool_result.is_error = is_error;
+    block.tool_result.status = is_error ? ToolResultStatus::Error : ToolResultStatus::Success;
+    msg.content.push_back(block);
     msg.timestamp = std::chrono::system_clock::now();
     return msg;
 }

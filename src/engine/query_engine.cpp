@@ -29,6 +29,38 @@ void QueryEngine::clear_history() {
     context_builder_.clear_cache();
 }
 
+size_t QueryEngine::compact(size_t keep_recent) {
+    if (messages_.size() <= keep_recent) {
+        return 0;
+    }
+    size_t removed = messages_.size() - keep_recent;
+
+    // Ensure we don't split a tool_use / tool_result pair.
+    // Walk forward from the trim point to find a clean boundary
+    // (a user message that isn't a tool result).
+    size_t trim_start = removed;
+    while (trim_start < messages_.size()) {
+        const auto& msg = messages_[trim_start];
+        // A clean boundary is a plain user message (not tool result)
+        if (msg.role == MessageRole::User &&
+            !msg.content.empty() &&
+            msg.content[0].type == ContentBlock::Type::Text) {
+            break;
+        }
+        ++trim_start;
+    }
+
+    if (trim_start >= messages_.size()) {
+        // Can't find a clean boundary; keep everything
+        return 0;
+    }
+
+    removed = trim_start;
+    messages_.erase(messages_.begin(), messages_.begin() + static_cast<long>(removed));
+    spdlog::info("Compacted conversation: removed {} messages, {} remaining", removed, messages_.size());
+    return removed;
+}
+
 QueryOptions QueryEngine::build_query_options(const std::string& user_input) {
     auto& session = state_.current_session();
 
@@ -40,18 +72,15 @@ QueryOptions QueryEngine::build_query_options(const std::string& user_input) {
     auto sys_ctx = context_builder_.build_system_context(session);
     auto user_ctx = context_builder_.build_user_context(session);
 
-    // Add tool system prompt
-    std::string tools_prompt = tools_.tools_system_prompt();
-
     if (!sys_ctx.content.empty()) {
         options.system_prompts.push_back(sys_ctx);
     }
     if (!user_ctx.content.empty()) {
         options.system_prompts.push_back(user_ctx);
     }
-    if (!tools_prompt.empty()) {
-        options.system_prompts.push_back({tools_prompt, std::nullopt});
-    }
+
+    // Include tools JSON schema for API
+    options.tools_json = tools_.tools_json_array();
 
     // Add user message
     messages_.push_back(Message::user(user_input));
@@ -195,7 +224,7 @@ ToolResult QueryEngine::execute_tool_call(const ToolCall& call) {
     // Convert to ToolResult
     ToolResult result;
     result.tool_use_id = call.id;
-    result.content = output.content;
+    result.content = output.is_error ? output.error_message : output.content;
     result.is_error = output.is_error;
     result.status = output.is_error ? ToolResultStatus::Error : ToolResultStatus::Success;
 
@@ -223,6 +252,11 @@ void QueryEngine::handle_stream_event(const StreamEvent& event) {
                 display_text(*event.delta_text);
             }
             break;
+        case StreamEventType::ContentBlockStart:
+            if (event.content_block && event.content_block->type == ContentBlock::Type::Thinking) {
+                display_thinking(event.content_block->thinking);
+            }
+            break;
         default:
             break;
     }
@@ -248,8 +282,10 @@ void QueryEngine::display_text(const std::string& text) {
     std::cout << text << std::flush;
 }
 
-void QueryEngine::display_thinking(const std::string& /*thinking*/) {
-    // Could display thinking in debug mode
+void QueryEngine::display_thinking(const std::string& thinking) {
+    if (!thinking.empty()) {
+        spdlog::debug("Thinking: {}", thinking.substr(0, 200));
+    }
 }
 
 }  // namespace claude

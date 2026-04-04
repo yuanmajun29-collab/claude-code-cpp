@@ -46,6 +46,10 @@ public:
 
     // Get the current conversation messages
     const std::vector<Message>& messages() const { return messages_; }
+    std::vector<Message>& messages() { return messages_; }
+
+    // Compact conversation by keeping only recent messages
+    size_t compact(size_t keep_recent = 20);
 
     // Clear conversation history
     void clear_history();

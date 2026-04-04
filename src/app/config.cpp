@@ -3,6 +3,7 @@
 #include "util/file_utils.h"
 #include "util/string_utils.h"
 #include <nlohmann/json.hpp>
+#include <spdlog/spdlog.h>
 #include <fstream>
 #include <filesystem>
 #include <cstdlib>
@@ -76,9 +77,9 @@ AppConfig AppConfig::load_from_file(const std::string& path) {
         if (j.contains("color")) config.color = j["color"].get<bool>();
 
     } catch (const json::parse_error& e) {
-        // Ignore parse errors, use defaults
+        spdlog::warn("Failed to parse config file {}: {}", file_path, e.what());
     } catch (const std::exception& e) {
-        // Ignore other errors
+        spdlog::warn("Error loading config file {}: {}", file_path, e.what());
     }
 
     return config;

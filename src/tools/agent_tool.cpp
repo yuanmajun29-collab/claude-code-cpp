@@ -20,9 +20,9 @@ std::string AgentTool::description() const {
 ToolInputSchema AgentTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["agent_type"] = "string: Type of agent (coder, reviewer, tester)";
-    schema.properties["task"] = "string: Description of the task to perform";
-    schema.properties["context"] = "string: Additional context (file paths, code snippets, etc.)";
+    schema.properties["agent_type"] = {"string", "Type of agent (coder, reviewer, tester)"};
+    schema.properties["task"] = {"string", "Description of the task to perform"};
+    schema.properties["context"] = {"string", "Additional context (file paths, code snippets, etc.)"};
     schema.required = {"agent_type", "task"};
     return schema;
 }

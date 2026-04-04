@@ -82,7 +82,10 @@ StreamEvent SSEParser::parse_event(const std::string& event_type, const std::str
                 event.usage_delta = usage;
             }
             if (j.contains("delta")) {
-                event.delta_text = j["delta"].value("stop_reason", "");
+                auto sr = j["delta"].value("stop_reason", "");
+                if (!sr.empty()) {
+                    event.stop_reason = sr;
+                }
             }
         } else if (normalized == "message_stop") {
             event.type = StreamEventType::MessageStop;

@@ -136,7 +136,7 @@ void AppState::restore_session(const std::string& session_id) {
             for (const auto& m : session_data["messages"]) {
                 Message msg;
                 msg.role = static_cast<MessageRole>(m.value("role", 0));
-                msg.content.push_back({ContentBlock::Type::Text, m.value("content", ""), {}, "", ""});
+                msg.content.push_back(ContentBlock::make_text(m.value("content", "")));
                 messages_.push_back(msg);
             }
         }

@@ -15,9 +15,9 @@ namespace claude {
 ToolInputSchema BashTool::input_schema() const {
     ToolInputSchema schema;
     schema.type = "object";
-    schema.properties["command"] = "string — The shell command to execute";
-    schema.properties["timeout"] = "number — Timeout in seconds (default 120)";
-    schema.properties["description"] = "string — Optional description of what the command does";
+    schema.properties["command"] = {"string", "The shell command to execute"};
+    schema.properties["timeout"] = {"number", "Timeout in seconds (default 120, max 600)"};
+    schema.properties["description"] = {"string", "Optional description of what the command does"};
     schema.required = {"command"};
     return schema;
 }
@@ -132,6 +132,11 @@ ToolOutput BashTool::execute(const std::string& input_json, ToolContext& ctx) {
         opts.timeout_seconds = timeout;
         opts.max_output_bytes = 50000;
         opts.merge_stderr = false;
+
+        // Inject environment variables from context
+        if (!ctx.extra_env.empty()) {
+            opts.extra_env = ctx.extra_env;
+        }
 
         auto result = util::exec_command(command, opts);
 

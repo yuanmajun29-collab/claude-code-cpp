@@ -46,9 +46,6 @@ private:
     // Build the JSON request body
     std::string build_request_body(const QueryOptions& options);
 
-    // Process SSE stream from curl
-    QueryResponse process_sse_stream(const std::string& response_body, StreamCallback callback);
-
     // Process non-streaming JSON response
     QueryResponse process_json_response(const std::string& response_body);
 

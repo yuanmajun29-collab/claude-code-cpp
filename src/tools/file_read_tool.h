@@ -34,6 +34,9 @@ private:
 
     // Read binary file info
     ToolOutput read_binary(const std::string& path) const;
+
+    // Read a single file (used by both single and batch modes)
+    ToolOutput read_single_file(const std::string& file_path, int offset, int limit, ToolContext& ctx);
 };
 
 }  // namespace claude
